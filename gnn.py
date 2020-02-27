@@ -24,12 +24,12 @@ period = 3  # 3*5s = 15s period
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
 batch_size = 32
-look_ahead = 2  # Steps to look ahead, will become the label
+look_ahead = 60  # Steps to look ahead, will become the label
 
 # Fill this with data loaders - still not sure how to save this
 loaders = []
 
-def pos_vel_next(last, current, look_ahead):
+def pos_vel_next(last, current, last_look_ahead, look_ahead):
 
     x = []
     y = []
@@ -37,13 +37,15 @@ def pos_vel_next(last, current, look_ahead):
     last = [float(i) for i in last]
     current = [float(i) for i in current]
     look_ahead = [float(i) for i in look_ahead]
+    last_look_ahead = [float(i) for i in last_look_ahead]
 
     for i, curr in enumerate(current):
         pos_i = curr
         vel_i = curr - last[i]
-        label = look_ahead[i]
-        x.append([pos_i])
-        y.append([label])
+        pos_ahead = look_ahead[i]
+        vel_ahead = pos_ahead - last_look_ahead[i]
+        x.append([pos_i, vel_i])
+        y.append([pos_ahead, vel_ahead])
 
 
     x = torch.tensor(x, dtype=torch.float)
@@ -51,53 +53,13 @@ def pos_vel_next(last, current, look_ahead):
 
     return x, y
 
-'''
-# Multiplex periods of > 1 second
-for i in range(period):
-
-    train_episode = []
-    val_episode = []
-
-    # Filter data s.t. only rows corresponding to that period remain
-    period_indices = [j for j in range(i, len(data), period)]
-    tempdata = data[period_indices]
-
-    # Swap col/rows for easier access 
-    tempdata = list(tempdata.transpose())
-
-    # Normalize by row
-
-    for row in range(len(tempdata) - look_ahead):
-
-        x, y = pos_vel_next(tempdata[row - 1], tempdata[row], tempdata[row + look_ahead])
-
-        data_list.append(Data(x=x, y=y, edge_index=edge_index))
-
-
-    loader = DataLoader(data_list, batch_size=batch_size)
-
-    #torch.save(data_list, "{}_p{}_la{}.pt".format("_".join(labels), period, look_ahead))
-
-    loaders.append(loader)
-
-    data_list = []
-'''
-
-print("max 0 ", np.amax(data, 0))
+# Normalize data by row
 data = data/np.amax(data, 0)
-print("max 0 ", np.amax(data, 0))
 
-for i in range(5):
-    print(data[i])
-    print(data[len(data) - i - 1])
-
-
+# Create list of Data objects
 for row in range(len(data) - look_ahead):
-    x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead])
+    x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
     data_list.append(Data(x=x, y=y, edge_index=edge_index))
-
-
-print(len(loaders))
 
 
 from torch_geometric.nn import MessagePassing
@@ -107,38 +69,84 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 
+# Simple 2 layer GCN
 class Net(torch.nn.Module):
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = GCNConv(1, 4)
-        self.conv2 = GCNConv(4, 1)
+        self.conv1 = GCNConv(2, 4)
+        self.conv2 = GCNConv(4, 2)
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
 
         x = self.conv1(x, edge_index)
         x = F.relu(x)
-        x = F.dropout(x, training=self.training)
+        x = F.dropout(x, 0.0)#training=self.training)
         x = self.conv2(x, edge_index)
 
         return x
 
 
 from tqdm import tqdm
+import random
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = Net().to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
 
 train_test_split = 0.8
+
+
 #data = data[0:int(len(data)/10)]
 train_data = data_list[0:int(len(data_list)*train_test_split)]
 test_data = data_list[int(len(data_list)*train_test_split):]
 
 
+train_data = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+test_data = DataLoader(test_data, batch_size=batch_size, shuffle=True)
+
+
+
 model.train()
 
-for epoch in range(1):
+for epoch in range(2):
+    loss_track = 0
+    for batch in tqdm(train_data):
+
+        optimizer.zero_grad()
+        out = model(batch)
+
+        loss = F.mse_loss(out, batch.y)
+        loss_track += loss.item()
+        #print("Out =    ", out.squeeze(1))
+        #print("Data.y = ", data.y.squeeze(1))
+        #print("Loss = ", loss)
+        loss.backward()
+        optimizer.step()
+
+    print("Avg loss: ", loss_track/len(train_data))
+
+model.eval()
+
+loss = 0
+
+final_out = None
+final_batch = None
+
+for batch in tqdm(test_data):
+        out = model(batch)
+        loss += F.mse_loss(out, batch.y)
+        final_out = out
+        final_batch = batch.y
+
+print("Final loss: ", loss/len(train_data))
+
+
+
+print(final_out)
+print(final_batch)
+
+'''
     for example in tqdm(train_data):
         #print("Data: ", data)
 
@@ -153,7 +161,7 @@ for epoch in range(1):
         loss.backward()
         optimizer.step()
 
-
+'''
 
 
 
