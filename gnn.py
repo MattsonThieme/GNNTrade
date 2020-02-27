@@ -83,6 +83,15 @@ for i in range(period):
     data_list = []
 '''
 
+print("max 0 ", np.amax(data, 0))
+data = data/np.amax(data, 0)
+print("max 0 ", np.amax(data, 0))
+
+for i in range(5):
+    print(data[i])
+    print(data[len(data) - i - 1])
+
+
 for row in range(len(data) - look_ahead):
     x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead])
     data_list.append(Data(x=x, y=y, edge_index=edge_index))
@@ -115,23 +124,32 @@ class Net(torch.nn.Module):
         return x
 
 
-
+from tqdm import tqdm
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = Net().to(device)
 
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
 
+train_test_split = 0.8
+#data = data[0:int(len(data)/10)]
+train_data = data_list[0:int(len(data_list)*train_test_split)]
+test_data = data_list[int(len(data_list)*train_test_split):]
+
+
 model.train()
 
-for epoch in range(20):
-    for data in data_list:
-        print("Data: ", data)
+for epoch in range(1):
+    for example in tqdm(train_data):
+        #print("Data: ", data)
+
+
         optimizer.zero_grad()
-        out = model(data)
-        print("Out = ", out)
-        print("Data.y = ", data.y)
-        loss = F.mse_loss(out, data.y)
-        print("Loss = ", loss)
+        out = model(example)
+
+        loss = F.mse_loss(out, example.y)
+        #print("Out =    ", out.squeeze(1))
+        #print("Data.y = ", data.y.squeeze(1))
+        #print("Loss = ", loss)
         loss.backward()
         optimizer.step()
 
