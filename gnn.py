@@ -40,13 +40,13 @@ edge_index = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
 
 period = 3  # 3*5s = 15s period
 
-bulk_data = bulk_data[:int(len(bulk_data)/5)]
+#bulk_data = bulk_data[:int(len(bulk_data)/5)]
 
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
-batch_size = 2
+batch_size = 128
 look_ahead = 2  # Steps to look ahead, will become the label
-num_epochs = 1
+num_epochs = 10
 train_test_split = 0.8
 
 # Fill this with data loaders - still not sure how to save this
@@ -191,13 +191,13 @@ final_batch = None
 
 for batch in tqdm(test_data):
         out = model(batch)
-        loss_track += F.mse_loss(out, batch.y)
+        loss_track += F.mse_loss(out, batch.y).item()
         final_out = out
         final_batch = batch.y
 
 # Calculate correct moves
 for i, x in enumerate(final_batch):
-    print("{} | {} | {}".format(final_out[i], x, final_out[i] - x))
+    print("{} | {} | {}%".format(final_out[i].data[0], x.data[0], 100*(final_out[i].data[0] - x.data[0])/x.data[0],2))
 
 print("Final loss: ", loss_track/len(train_data))
 
