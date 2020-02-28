@@ -44,9 +44,9 @@ period = 3  # 3*5s = 15s period
 
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
-batch_size = 128
-look_ahead = 2  # Steps to look ahead, will become the label
-num_epochs = 10
+batch_size = 32
+look_ahead = 1440  # Steps to look ahead, will become the label
+num_epochs = 6
 train_test_split = 0.8
 
 # Fill this with data loaders - still not sure how to save this
@@ -143,17 +143,12 @@ class SAGEConv(MessagePassing):
     def update(self, aggr_out, x):
         # aggr_out has shape [N, out_channels]
 
-
         new_embedding = torch.cat([aggr_out, x], dim=1)
         
         new_embedding = self.update_lin(new_embedding)
         new_embedding = self.update_act(new_embedding)
         
         return new_embedding
-
-
-
-
 
 
 model = SAGEConv(2,2).to(device)
@@ -187,19 +182,41 @@ model.eval()
 loss_track = 0
 
 final_out = None
-final_batch = None
+final_batch_label = None
+final_batch_initial = None
 
 for batch in tqdm(test_data):
         out = model(batch)
         loss_track += F.mse_loss(out, batch.y).item()
         final_out = out
-        final_batch = batch.y
+        final_batch_label = batch.y
+        final_batch_initial = batch.x
+
+dir_correct = 0
+dir_wrong = 0
 
 # Calculate correct moves
-for i, x in enumerate(final_batch):
-    print("{} | {} | {}%".format(final_out[i].data[0], x.data[0], 100*(final_out[i].data[0] - x.data[0])/x.data[0],2))
+for i, x in enumerate(final_batch_label):
 
-print("Final loss: ", loss_track/len(train_data))
+    initial = final_batch_initial[i].data[0]
+    final = x.data[0]
+    pred = final_out[i].data[0]
+    price_shift = 100*(final - initial)/final
+    prediction_acc = 100*(final - pred)/final
+    price_dir = final - initial
+    pred_dir = pred - initial
+
+    if price_dir < 0 and pred_dir < 0:
+        dir_correct += 1
+    if price_dir > 0 and pred_dir < 0:
+        dir_correct += 1
+    else:
+        dir_wrong += 1
+
+
+    print("{} to {} shifted {}% | pred off by {}%".format(initial, final, price_shift, prediction_acc))
+
+print("Correct direction ACC: ", dir_correct/(dir_correct + dir_wrong))
 
 #print(final_out)
 #print(final_batch)
