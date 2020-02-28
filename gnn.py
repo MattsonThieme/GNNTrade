@@ -12,7 +12,7 @@ import csv
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GCNConv, GatedGraphConv
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import add_self_loops, degree
 import torch
@@ -21,6 +21,8 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 from tqdm import tqdm
 import random
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 data_list = []
 bulk_data = []
@@ -37,11 +39,14 @@ edge_index = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
 
 
 period = 3  # 3*5s = 15s period
+
+bulk_data = bulk_data[:int(len(bulk_data)/5)]
+
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
-batch_size = 128
-look_ahead = 60  # Steps to look ahead, will become the label
-num_epochs = 5
+batch_size = 2
+look_ahead = 2  # Steps to look ahead, will become the label
+num_epochs = 1
 train_test_split = 0.8
 
 # Fill this with data loaders - still not sure how to save this
@@ -79,25 +84,80 @@ for row in range(len(data) - look_ahead):
     x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
     data_list.append(Data(x=x, y=y, edge_index=edge_index))
 
+from torch.nn import Parameter as Param
+from torch_geometric.nn.conv import MessagePassing
+
 # Simple 2 layer GCN
-class Net(torch.nn.Module):
+class GCN(MessagePassing):
     def __init__(self):
-        super(Net, self).__init__()
+        super(GCN, self).__init__()
         self.conv1 = GCNConv(2, 4)
-        self.conv2 = GCNConv(4, 2)
+        #self.conv2 = GCNConv(4, 2)
+        self.ggc1 = GatedGraphConv(2,2)
 
     def forward(self, data):
-        x, edge_index = data.x, data.edge_index
 
+        print("dim: ",data.x.unsqueeze(-1).size(1))
+
+        x, edge_index = data.x, data.edge_index
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, 0.0)
-        x = self.conv2(x, edge_index)
-
+        #x = self.conv2(x, edge_index)
+        x = self.ggc1(x, edge_index)
         return x
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = Net().to(device)
+from torch_geometric.nn import MessagePassing
+from torch_geometric.utils import add_self_loops, degree
+from torch_geometric.utils import remove_self_loops, add_self_loops
+
+class SAGEConv(MessagePassing):
+    def __init__(self, in_channels, out_channels):
+        super(SAGEConv, self).__init__(aggr='max') #  "Max" aggregation.
+        self.lin = torch.nn.Linear(in_channels, out_channels)
+        self.act = torch.nn.ReLU()
+        self.update_lin = torch.nn.Linear(in_channels + out_channels, in_channels, bias=False)
+        self.update_act = torch.nn.ReLU()
+        
+    def forward(self, data):
+        # x has shape [N, in_channels]
+        # edge_index has shape [2, E]
+
+        x, edge_index = data.x, data.edge_index
+        num_nodes = data.num_nodes
+        
+        edge_index, _ = remove_self_loops(edge_index)
+        edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
+        
+        
+        return self.propagate(edge_index, size=(num_nodes, num_nodes), x=x)
+
+    def message(self, x_j):
+        # x_j has shape [E, in_channels]
+
+        x_j = self.lin(x_j)
+        x_j = self.act(x_j)
+        
+        return x_j
+
+    def update(self, aggr_out, x):
+        # aggr_out has shape [N, out_channels]
+
+
+        new_embedding = torch.cat([aggr_out, x], dim=1)
+        
+        new_embedding = self.update_lin(new_embedding)
+        new_embedding = self.update_act(new_embedding)
+        
+        return new_embedding
+
+
+
+
+
+
+model = SAGEConv(2,2).to(device)
+#model = GCN().to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
 
 train_data = data_list[0:int(len(data_list)*train_test_split)]
@@ -134,6 +194,10 @@ for batch in tqdm(test_data):
         loss_track += F.mse_loss(out, batch.y)
         final_out = out
         final_batch = batch.y
+
+# Calculate correct moves
+for i, x in enumerate(final_batch):
+    print("{} | {} | {}".format(final_out[i], x, final_out[i] - x))
 
 print("Final loss: ", loss_track/len(train_data))
 
