@@ -114,8 +114,10 @@ from torch_geometric.utils import remove_self_loops, add_self_loops
 class SAGEConv(MessagePassing):
     def __init__(self, in_channels, out_channels):
         super(SAGEConv, self).__init__(aggr='max') #  "Max" aggregation.
-        self.lin = torch.nn.Linear(in_channels, out_channels)
-        self.act = torch.nn.ReLU()
+        self.lin1 = torch.nn.Linear(in_channels, out_channels)
+        self.act1 = torch.nn.ReLU()
+        #self.lin2 = torch.nn.Linear(in_channels, out_channels)
+        #self.act2 = torch.nn.ReLU()
         self.update_lin = torch.nn.Linear(in_channels + out_channels, in_channels, bias=False)
         self.update_act = torch.nn.ReLU()
         
@@ -135,8 +137,10 @@ class SAGEConv(MessagePassing):
     def message(self, x_j):
         # x_j has shape [E, in_channels]
 
-        x_j = self.lin(x_j)
-        x_j = self.act(x_j)
+        x_j = self.lin1(x_j)
+        x_j = self.act1(x_j)
+        #x_j = self.lin2(x_j)
+        #x_j = self.act2(x_j)
         
         return x_j
 
@@ -201,20 +205,20 @@ for i, x in enumerate(final_batch_label):
     initial = final_batch_initial[i].data[0]
     final = x.data[0]
     pred = final_out[i].data[0]
-    price_shift = 100*(final - initial)/final
-    prediction_acc = 100*(final - pred)/final
+    actual_shift = 100*(final - initial)/final
+    predicted_shift = 100*(pred - initial)/final
     price_dir = final - initial
     pred_dir = pred - initial
 
-    if price_dir < 0 and pred_dir < 0:
+    if predicted_shift < 0 and actual_shift < 0:
         dir_correct += 1
-    if price_dir > 0 and pred_dir < 0:
+    if predicted_shift > 0 and actual_shift < 0:
         dir_correct += 1
     else:
         dir_wrong += 1
 
 
-    print("{} to {} shifted {}% | pred off by {}%".format(initial, final, price_shift, prediction_acc))
+    print("{} to {} shifted {}% | pred off by {}%".format(initial, final, actual_shift, predicted_shift))
 
 print("Correct direction ACC: ", dir_correct/(dir_correct + dir_wrong))
 
