@@ -43,15 +43,16 @@ edge_index = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
 
 period = 6  # 6*5s = 30s period
 
-bulk_data = bulk_data[:int(len(bulk_data)/10)]
+# Scale down dataset for prototyping
+#bulk_data = bulk_data[:int(len(bulk_data)/10)]
 
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
 batch_size = 2048
 look_ahead = 60  # Steps to look ahead - 30 minutes
-num_epochs = 4
+num_epochs = 3
 train_test_split = 0.8
-look_back = 30  # Steps to look back - 15 minutes
+look_back = 720  # Steps to look back - 15 minutes
 label_size = 1  # Only want to predict
 
 # Fill this with data loaders - still not sure how to save this
@@ -115,9 +116,6 @@ data = data/np.amax(data, 0)
 
 datasets = multiplex(data, period)
 
-# Need to interleave periods
-# Nest below in for data in datasets
-
 # Create list of Data objects
 for data in datasets:
     for row in range(look_back, len(data) - look_ahead):
@@ -174,7 +172,7 @@ class SAGEConv(MessagePassing):
 
         
         #self.update_lin = torch.nn.Linear(in_channels + out_channels, 1, bias=True)
-        self.update_lin = torch.nn.Linear(hidden_dim, out_channels, bias=False)
+        self.update_lin = torch.nn.Linear(hidden_dim + message_out, out_channels, bias=False)
         self.update_act = torch.nn.ReLU()
         
     def forward(self, data):
@@ -200,9 +198,9 @@ class SAGEConv(MessagePassing):
 
     def update(self, aggr_out, x):
 
-        new_embedding = torch.cat([aggr_out, x], dim=1).unsqueeze(0)
+        new_embedding, self.hidden = self.lstm_layer(x.unsqueeze(0), self.hidden)
+        new_embedding = torch.cat([aggr_out, new_embedding.squeeze(0)], dim=1).unsqueeze(0)
 
-        new_embedding, self.hidden = self.lstm_layer(new_embedding, self.hidden)
         new_embedding = self.update_lin(new_embedding)
         new_embedding = self.update_act(new_embedding)
         
@@ -211,7 +209,7 @@ class SAGEConv(MessagePassing):
 #model = SAGEConv(2,2).to(device)
 
 message_out = 8  # Size of the output of messages
-input_dim = look_back + message_out  # Input dim to the LSTM
+input_dim = look_back  # Input dim to the LSTM
 output_dim = label_size  # Output of final linear embedding update
 hidden_dim = 16  # Hidden dim of LSTM
 num_layers = 1  # Number of LSTM layers
@@ -223,8 +221,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-6)#5e-
 train_data = data_list[0:int(len(data_list)*train_test_split)]
 test_data = data_list[int(len(data_list)*train_test_split):]
 
-train_data = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-test_data = DataLoader(test_data, batch_size=batch_size, shuffle=True)
+train_data = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=10)
+test_data = DataLoader(test_data, batch_size=batch_size, shuffle=True, num_workers=10)
 
 
 model.train()
@@ -255,6 +253,7 @@ dir_wrong = 0
 
 # Track accuracies for individual assets
 assets = [[],[],[],[]]
+asset_names = ['BTC','ETH','XLM','CVC']
 
 for batch in tqdm(test_data):
     out = model(batch)
@@ -290,6 +289,6 @@ for batch in tqdm(test_data):
 print("Correct direction ACC: ", dir_correct/(dir_correct + dir_wrong))
 
 for i, scores in enumerate(assets):
-    print("{}: {}% correct".format(i, sum(scores)/len(scores)))
+    print("{}: {}% correct".format(asset_names[i], sum(scores)/len(scores)))
 
 
