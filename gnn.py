@@ -44,9 +44,9 @@ period = 3  # 3*5s = 15s period
 
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
-batch_size = 32
-look_ahead = 1440  # Steps to look ahead, will become the label
-num_epochs = 6
+batch_size = 1024
+look_ahead = 12  # Steps to look ahead, will become the label
+num_epochs = 15
 train_test_split = 0.8
 
 # Fill this with data loaders - still not sure how to save this
@@ -92,19 +92,17 @@ class GCN(MessagePassing):
     def __init__(self):
         super(GCN, self).__init__()
         self.conv1 = GCNConv(2, 4)
-        #self.conv2 = GCNConv(4, 2)
-        self.ggc1 = GatedGraphConv(2,2)
+        self.conv2 = GCNConv(4, 2)
+        #self.ggc1 = GatedGraphConv(2,2)
 
     def forward(self, data):
-
-        print("dim: ",data.x.unsqueeze(-1).size(1))
 
         x, edge_index = data.x, data.edge_index
         x = self.conv1(x, edge_index)
         x = F.relu(x)
         x = F.dropout(x, 0.0)
-        #x = self.conv2(x, edge_index)
-        x = self.ggc1(x, edge_index)
+        x = self.conv2(x, edge_index)
+        #x = self.ggc1(x, edge_index)
         return x
 
 from torch_geometric.nn import MessagePassing
@@ -113,7 +111,7 @@ from torch_geometric.utils import remove_self_loops, add_self_loops
 
 class SAGEConv(MessagePassing):
     def __init__(self, in_channels, out_channels):
-        super(SAGEConv, self).__init__(aggr='max') #  "Max" aggregation.
+        super(SAGEConv, self).__init__(aggr='add') #  "Max" aggregation.
         self.lin1 = torch.nn.Linear(in_channels, out_channels)
         self.act1 = torch.nn.ReLU()
         #self.lin2 = torch.nn.Linear(in_channels, out_channels)
@@ -157,7 +155,7 @@ class SAGEConv(MessagePassing):
 
 model = SAGEConv(2,2).to(device)
 #model = GCN().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=5e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-5)
 
 train_data = data_list[0:int(len(data_list)*train_test_split)]
 test_data = data_list[int(len(data_list)*train_test_split):]
@@ -175,6 +173,7 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
         out = model(batch)
         loss = F.mse_loss(out, batch.y)
+        #loss = nn.l1_loss(out, batch.y)
         loss_track += loss.item()
         loss.backward()
         optimizer.step()
@@ -212,7 +211,7 @@ for i, x in enumerate(final_batch_label):
 
     if predicted_shift < 0 and actual_shift < 0:
         dir_correct += 1
-    if predicted_shift > 0 and actual_shift < 0:
+    if predicted_shift > 0 and actual_shift > 0:
         dir_correct += 1
     else:
         dir_wrong += 1
