@@ -48,7 +48,7 @@ period = 6  # 6*5s = 30s period
 
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
-batch_size = 2048
+batch_size = 1024
 look_ahead = 60  # Steps to look ahead - 30 minutes
 num_epochs = 3
 train_test_split = 0.8
@@ -174,7 +174,13 @@ class SAGEConv(MessagePassing):
         #self.update_lin = torch.nn.Linear(in_channels + out_channels, 1, bias=True)
         self.update_lin = torch.nn.Linear(hidden_dim + message_out, out_channels, bias=False)
         self.update_act = torch.nn.ReLU()
-        
+    
+    def init_hidden(self):
+        self.inp = torch.randn(self.batch_size, self.seq_len, self.input_dim)
+        self.hidden_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
+        self.cell_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
+        self.hidden = (self.hidden_state, self.cell_state)
+
     def forward(self, data):
         # x has shape [N, in_channels]
         # edge_index has shape [2, E]
@@ -198,7 +204,15 @@ class SAGEConv(MessagePassing):
 
     def update(self, aggr_out, x):
 
+        #self.hidden_state.detach_()
+        #self.cell_state.detach_()
+
         new_embedding, self.hidden = self.lstm_layer(x.unsqueeze(0), self.hidden)
+
+        # Detach hidden and cell states from the computation graph after each batch, otherwise training slows to a halt
+        #self.hidden_state.detach_()
+        #self.cell_state.detach_()
+
         new_embedding = torch.cat([aggr_out, new_embedding.squeeze(0)], dim=1).unsqueeze(0)
 
         new_embedding = self.update_lin(new_embedding)
@@ -226,19 +240,24 @@ test_data = DataLoader(test_data, batch_size=batch_size, shuffle=True, num_worke
 
 
 model.train()
-
+from torch.autograd import Variable
 for epoch in range(num_epochs):
     loss_track = 0
     for batch in tqdm(train_data):
-
+        
+        model.init_hidden()
         optimizer.zero_grad()
         out = model(batch)
         loss = F.mse_loss(out, batch.y)
-        loss_track += loss.item()
+        
         loss.backward(retain_graph=True)
+        loss_track += loss.item()
         optimizer.step()
+        #model.hidden_state.detach_()
+        #model.cell_state.detach_()
+        
 
-    print("Epoch {}/{}, Avg loss: {}".format(epoch, num_epochs, loss_track/len(train_data)))
+    print("Epoch {}/{}, Avg loss: {}".format(epoch+1, num_epochs, loss_track/len(train_data)))
 
 model.eval()
 
