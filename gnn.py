@@ -41,17 +41,17 @@ edge_index = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
                            [1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2]], dtype=torch.long)
 
 
-period = 3  # 3*5s = 15s period
+period = 6  # 6*5s = 30s period
 
 bulk_data = bulk_data[:int(len(bulk_data)/10)]
 
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
-batch_size = 1024#1024
-look_ahead = 12  # Steps to look ahead, will become the label
-num_epochs = 10
+batch_size = 2048
+look_ahead = 60  # Steps to look ahead - 30 minutes
+num_epochs = 4
 train_test_split = 0.8
-look_back = 10
+look_back = 30  # Steps to look back - 15 minutes
 label_size = 1  # Only want to predict
 
 # Fill this with data loaders - still not sure how to save this
@@ -93,20 +93,38 @@ def gen_data(history, look_ahead):
 
     return x, y
 
+
+def multiplex(data, period):
+    max_index = len(data)-len(data)%period  # Don't overshoot
+    data = np.array(data[:max_index])
+
+    datasets = []
+
+    # Multiplex periods of > 1 second
+    for i in range(period):
+        # Filter data s.t. only rows corresponding to that period remain
+        period_indices = [j for j in range(i, len(data), period)]
+        tempdata = data[period_indices]
+        datasets.append(tempdata)
+
+
+    return datasets
+
 # Normalize data by row
 data = data/np.amax(data, 0)
 
+datasets = multiplex(data, period)
 
 # Need to interleave periods
-
+# Nest below in for data in datasets
 
 # Create list of Data objects
-for row in range(look_back, len(data) - look_ahead):
-    #x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
+for data in datasets:
+    for row in range(look_back, len(data) - look_ahead):
+        #x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
+        x, y = gen_data(data[row-look_back:row], data[row+look_ahead])    
 
-    x, y = gen_data(data[row-look_back:row], data[row+look_ahead])    
-
-    data_list.append(Data(x=x, y=y, edge_index=edge_index))
+        data_list.append(Data(x=x, y=y, edge_index=edge_index))
 
 from torch.nn import Parameter as Param
 from torch_geometric.nn.conv import MessagePassing
@@ -117,7 +135,6 @@ class GCN(MessagePassing):
         super(GCN, self).__init__()
         self.conv1 = GCNConv(2, 4)
         self.conv2 = GCNConv(4, 2)
-        #self.ggc1 = GatedGraphConv(2,2)
 
     def forward(self, data):
 
@@ -126,7 +143,6 @@ class GCN(MessagePassing):
         x = F.relu(x)
         x = F.dropout(x, 0.0)
         x = self.conv2(x, edge_index)
-        #x = self.ggc1(x, edge_index)
         return x
 
 from torch_geometric.nn import MessagePassing
@@ -137,13 +153,10 @@ from torch_geometric.utils import remove_self_loops, add_self_loops
 # Try changing the update function to be an LSTM, and the massage function to be still an MLP
 # Need to change parser to include x price steps back, reasonable
 class SAGEConv(MessagePassing):
-    def __init__(self, in_channels, out_channels, input_dim, hidden_dim, n_layers):
+    def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers):
         super(SAGEConv, self).__init__(aggr='add') #  "Max" aggregation.
-        self.lin1 = torch.nn.Linear(in_channels, out_channels)
+        self.lin1 = torch.nn.Linear(in_channels, message_out)
         self.act1 = torch.nn.ReLU()
-        #self.lin2 = torch.nn.Linear(in_channels, out_channels)
-        #self.act2 = torch.nn.ReLU()
-        #self.update_lin = torch.nn.Linear(in_channels + out_channels, in_channels, bias=True)
         
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim  # Note: output_dim for LSTM = hidden_dim for now
@@ -161,7 +174,7 @@ class SAGEConv(MessagePassing):
 
         
         #self.update_lin = torch.nn.Linear(in_channels + out_channels, 1, bias=True)
-        self.update_lin = torch.nn.Linear(hidden_dim, 1, bias=False)
+        self.update_lin = torch.nn.Linear(hidden_dim, out_channels, bias=False)
         self.update_act = torch.nn.ReLU()
         
     def forward(self, data):
@@ -170,8 +183,6 @@ class SAGEConv(MessagePassing):
 
         x, edge_index = data.x, data.edge_index
         num_nodes = data.num_nodes
-
-        #print(x)
         
         edge_index, _ = remove_self_loops(edge_index)
         edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
@@ -184,24 +195,14 @@ class SAGEConv(MessagePassing):
 
         x_j = self.lin1(x_j)
         x_j = self.act1(x_j)
-        #x_j = self.lin2(x_j)
-        #x_j = self.act2(x_j)
         
         return x_j
 
     def update(self, aggr_out, x):
-        # aggr_out has shape [N, out_channels]
-
-        #print("Aggr size: ", aggr_out.shape)
-        #print("x size: ", x.shape)
 
         new_embedding = torch.cat([aggr_out, x], dim=1).unsqueeze(0)
 
-        #print("New new_embedding shape: ", new_embedding.shape)
         new_embedding, self.hidden = self.lstm_layer(new_embedding, self.hidden)
-        
-        #new_embedding = self.lstm_layer(new_embedding)
-        #print("After LSTM: ", new_embedding.shape)
         new_embedding = self.update_lin(new_embedding)
         new_embedding = self.update_act(new_embedding)
         
@@ -209,12 +210,13 @@ class SAGEConv(MessagePassing):
 
 #model = SAGEConv(2,2).to(device)
 
-input_dim = look_back + 1
-output_dim = label_size
-hidden_dim = 32
-num_layers = 1
+message_out = 8  # Size of the output of messages
+input_dim = look_back + message_out  # Input dim to the LSTM
+output_dim = label_size  # Output of final linear embedding update
+hidden_dim = 16  # Hidden dim of LSTM
+num_layers = 1  # Number of LSTM layers
 
-model = SAGEConv(look_back,label_size, input_dim, hidden_dim, num_layers).to(device)
+model = SAGEConv(look_back,label_size, message_out, input_dim, hidden_dim, num_layers).to(device)
 #model = GCN().to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-6)#5e-4)
 
@@ -234,7 +236,6 @@ for epoch in range(num_epochs):
         optimizer.zero_grad()
         out = model(batch)
         loss = F.mse_loss(out, batch.y)
-        #loss = nn.l1_loss(out, batch.y)
         loss_track += loss.item()
         loss.backward(retain_graph=True)
         optimizer.step()
@@ -249,41 +250,46 @@ final_out = None
 final_batch_label = None
 final_batch_initial = None
 
-for batch in tqdm(test_data):
-        out = model(batch)
-        loss_track += F.mse_loss(out, batch.y).item()
-        final_out = out
-        final_batch_label = batch.y
-        final_batch_initial = batch.x
-
 dir_correct = 0
 dir_wrong = 0
 
+# Track accuracies for individual assets
 assets = [[],[],[],[]]
 
-# Calculate correct moves
-for i, x in enumerate(final_batch_label):
+for batch in tqdm(test_data):
+    out = model(batch)
+    loss_track += F.mse_loss(out, batch.y).item()
+    final_out = out
+    final_batch_label = batch.y
+    final_batch_initial = batch.x
 
-    initial = final_batch_initial[i].data[0]
-    final = x.data[0]
-    pred = final_out[i].data[0]
-    actual_shift = 100*(final - initial)/final
-    predicted_shift = 100*(pred - initial)/final
-    price_dir = final - initial
-    pred_dir = pred - initial
+    # Calculate correct moves
+    for i, x in enumerate(final_batch_label):
 
-    if predicted_shift < 0 and actual_shift < 0:
-        dir_correct += 1
-    if predicted_shift > 0 and actual_shift > 0:
-        dir_correct += 1
-    else:
-        dir_wrong += 1
+        initial = final_batch_initial[i].data[0]
+        final = x.data[0]
+        pred = final_out[i].data[0]
+        actual_shift = 100*(final - initial)/final
+        predicted_shift = 100*(pred - initial)/final
+        price_dir = final - initial
+        pred_dir = pred - initial
+
+        if predicted_shift < 0 and actual_shift < 0:
+            dir_correct += 1
+            assets[i%len(assets)].append(1)
+        if predicted_shift > 0 and actual_shift > 0:
+            dir_correct += 1
+            assets[i%len(assets)].append(1)
+        else:
+            dir_wrong += 1
+            assets[i%len(assets)].append(0)
 
 
-    print("{} to {} shifted {}% | pred off by {}%".format(initial, final, actual_shift, predicted_shift))
+    #print("{} to {} shifted {}% | pred off by {}%".format(initial, final, actual_shift, predicted_shift))
 
 print("Correct direction ACC: ", dir_correct/(dir_correct + dir_wrong))
 
-#print(final_out)
-#print(final_batch)
+for i, scores in enumerate(assets):
+    print("{}: {}% correct".format(i, sum(scores)/len(scores)))
+
 
