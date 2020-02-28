@@ -116,7 +116,7 @@ class SAGEConv(MessagePassing):
         self.act1 = torch.nn.ReLU()
         #self.lin2 = torch.nn.Linear(in_channels, out_channels)
         #self.act2 = torch.nn.ReLU()
-        self.update_lin = torch.nn.Linear(in_channels + out_channels, in_channels, bias=False)
+        self.update_lin = torch.nn.Linear(in_channels + out_channels, in_channels, bias=True)
         self.update_act = torch.nn.ReLU()
         
     def forward(self, data):
@@ -155,7 +155,7 @@ class SAGEConv(MessagePassing):
 
 model = SAGEConv(2,2).to(device)
 #model = GCN().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-5)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-5)#5e-4)
 
 train_data = data_list[0:int(len(data_list)*train_test_split)]
 test_data = data_list[int(len(data_list)*train_test_split):]
