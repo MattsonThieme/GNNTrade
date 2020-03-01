@@ -9,6 +9,19 @@
 # Keep track of accuracy for each asset individually
 
 
+
+############
+
+# Am I predicting one value for all four assets?!
+
+###########
+
+# Make message passing operation an LSTM
+# Make each LSTM it's own network. See https://github.com/ethanfetaya/NRI/blob/master/modules.py line 460
+
+
+
+
 import torch
 from torch_geometric.data import Data, DataLoader
 import csv
@@ -50,9 +63,9 @@ max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
 batch_size = 1024
 look_ahead = 60  # Steps to look ahead - 30 minutes
-num_epochs = 3
+num_epochs = 15
 train_test_split = 0.8
-look_back = 720  # Steps to look back - 15 minutes
+look_back = 60  # Steps to look back - 1 hr
 label_size = 1  # Only want to predict
 
 # Fill this with data loaders - still not sure how to save this
@@ -89,6 +102,8 @@ def gen_data(history, look_ahead):
         x.append(history[:,i])
         y.append([look_ahead[i]])
 
+
+
     x = torch.tensor(x, dtype=torch.float)
     y = torch.tensor(y, dtype=torch.float)
 
@@ -120,7 +135,8 @@ datasets = multiplex(data, period)
 for data in datasets:
     for row in range(look_back, len(data) - look_ahead):
         #x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
-        x, y = gen_data(data[row-look_back:row], data[row+look_ahead])    
+        x, y = gen_data(data[row-look_back:row], data[row+look_ahead])
+        #print("SHAPE ", y.shape, y)    
 
         data_list.append(Data(x=x, y=y, edge_index=edge_index))
 
@@ -153,8 +169,11 @@ from torch_geometric.utils import remove_self_loops, add_self_loops
 class SAGEConv(MessagePassing):
     def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers):
         super(SAGEConv, self).__init__(aggr='add') #  "Max" aggregation.
-        self.lin1 = torch.nn.Linear(in_channels, message_out)
+        self.lin1 = torch.nn.Linear(in_channels, 128)
+        self.LLn1 = nn.LayerNorm(128)
+        self.lin2 = torch.nn.Linear(128, message_out)
         self.act1 = torch.nn.ReLU()
+        self.act2 = torch.nn.ReLU()
         
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim  # Note: output_dim for LSTM = hidden_dim for now
@@ -172,8 +191,11 @@ class SAGEConv(MessagePassing):
 
         
         #self.update_lin = torch.nn.Linear(in_channels + out_channels, 1, bias=True)
-        self.update_lin = torch.nn.Linear(hidden_dim + message_out, out_channels, bias=False)
-        self.update_act = torch.nn.ReLU()
+        self.update_lin1 = torch.nn.Linear(hidden_dim + message_out, 128, bias=False)
+        self.ULn1 = nn.LayerNorm(128)
+        self.update_act1 = torch.nn.ReLU()
+        self.update_lin2 = torch.nn.Linear(128, out_channels, bias=False)
+        self.update_act2 = torch.nn.ReLU()
     
     def init_hidden(self):
         self.inp = torch.randn(self.batch_size, self.seq_len, self.input_dim)
@@ -197,8 +219,8 @@ class SAGEConv(MessagePassing):
     def message(self, x_j):
         # x_j has shape [E, in_channels]
 
-        x_j = self.lin1(x_j)
-        x_j = self.act1(x_j)
+        x_j = self.act1(self.LLn1(self.lin1(x_j)))
+        x_j = self.act2(self.lin2(x_j))
         
         return x_j
 
@@ -215,8 +237,8 @@ class SAGEConv(MessagePassing):
 
         new_embedding = torch.cat([aggr_out, new_embedding.squeeze(0)], dim=1).unsqueeze(0)
 
-        new_embedding = self.update_lin(new_embedding)
-        new_embedding = self.update_act(new_embedding)
+        new_embedding = self.update_act1(self.ULn1(self.update_lin1(new_embedding)))
+        new_embedding = self.update_act2(self.update_lin2(new_embedding))
         
         return new_embedding.squeeze(0)
 
@@ -228,9 +250,9 @@ output_dim = label_size  # Output of final linear embedding update
 hidden_dim = 16  # Hidden dim of LSTM
 num_layers = 1  # Number of LSTM layers
 
-model = SAGEConv(look_back,label_size, message_out, input_dim, hidden_dim, num_layers).to(device)
+model = SAGEConv(look_back, output_dim, message_out, input_dim, hidden_dim, num_layers).to(device)
 #model = GCN().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-6)#5e-4)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.005, weight_decay=5e-5)
 
 train_data = data_list[0:int(len(data_list)*train_test_split)]
 test_data = data_list[int(len(data_list)*train_test_split):]
@@ -243,6 +265,10 @@ model.train()
 from torch.autograd import Variable
 for epoch in range(num_epochs):
     loss_track = 0
+    if epoch == 3:
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.0015, weight_decay=5e-5)
+    if epoch == 9:
+        optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
     for batch in tqdm(train_data):
         
         model.init_hidden()
