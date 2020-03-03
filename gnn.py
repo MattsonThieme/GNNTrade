@@ -63,7 +63,7 @@ max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
 batch_size = 1024
 look_ahead = 60  # Steps to look ahead - 30 minutes
-num_epochs = 15
+num_epochs = 3
 train_test_split = 0.8
 look_back = 60  # Steps to look back - 1 hr
 label_size = 1  # Only want to predict
@@ -89,7 +89,6 @@ def pos_vel_next(last, current, last_look_ahead, look_ahead):
         x.append([pos_i, vel_i])
         y.append([pos_ahead, vel_ahead])
 
-
     x = torch.tensor(x, dtype=torch.float)
     y = torch.tensor(y, dtype=torch.float)
 
@@ -101,8 +100,6 @@ def gen_data(history, look_ahead):
     for i in range(len(history[0])):
         x.append(history[:,i])
         y.append([look_ahead[i]])
-
-
 
     x = torch.tensor(x, dtype=torch.float)
     y = torch.tensor(y, dtype=torch.float)
@@ -135,8 +132,7 @@ datasets = multiplex(data, period)
 for data in datasets:
     for row in range(look_back, len(data) - look_ahead):
         #x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
-        x, y = gen_data(data[row-look_back:row], data[row+look_ahead])
-        #print("SHAPE ", y.shape, y)    
+        x, y = gen_data(data[row-look_back:row], data[row+look_ahead])   
 
         data_list.append(Data(x=x, y=y, edge_index=edge_index))
 
@@ -167,7 +163,7 @@ from torch_geometric.utils import remove_self_loops, add_self_loops
 # Try changing the update function to be an LSTM, and the massage function to be still an MLP
 # Need to change parser to include x price steps back, reasonable
 class SAGEConv(MessagePassing):
-    def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers):
+    def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers, flow='target_to_source'):
         super(SAGEConv, self).__init__(aggr='add') #  "Max" aggregation.
         self.lin1 = torch.nn.Linear(in_channels, 128)
         self.LLn1 = nn.LayerNorm(128)
@@ -179,6 +175,8 @@ class SAGEConv(MessagePassing):
         self.hidden_dim = hidden_dim  # Note: output_dim for LSTM = hidden_dim for now
         self.n_layers = n_layers
         self.lstm_layer = nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
+        self.lstm_message = nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
+        self.l1_message = torch.nn.Linear(self.hidden_dim, message_out, bias=False)
         #self.lstm_layer = nn.GRU(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
 
         self.batch_size = 1
@@ -204,8 +202,6 @@ class SAGEConv(MessagePassing):
         self.hidden = (self.hidden_state, self.cell_state)
 
     def forward(self, data):
-        # x has shape [N, in_channels]
-        # edge_index has shape [2, E]
 
         x, edge_index = data.x, data.edge_index
         num_nodes = data.num_nodes
@@ -217,11 +213,25 @@ class SAGEConv(MessagePassing):
         return self.propagate(edge_index, size=(num_nodes, num_nodes), x=x)
 
     def message(self, x_j):
+
+        self.init_hidden()
         # x_j has shape [E, in_channels]
 
-        x_j = self.act1(self.LLn1(self.lin1(x_j)))
-        x_j = self.act2(self.lin2(x_j))
+        #x = x_j.clone()
+
+
+        #x_j = self.act1(self.LLn1(self.lin1(x_j)))
+        #x_j = self.act2(self.lin2(x_j))
+
+        #print("Desired shape: ",x_j.shape)
+        x_j, self.hidden = self.lstm_message(x_j.unsqueeze(0), self.hidden)
         
+        x_j = self.act1(x_j)
+        x_j = self.act2(self.l1_message(x_j.squeeze(0)))
+        #print("Current shape: ",x.shape)
+
+        
+
         return x_j
 
     def update(self, aggr_out, x):
@@ -265,10 +275,10 @@ model.train()
 from torch.autograd import Variable
 for epoch in range(num_epochs):
     loss_track = 0
-    if epoch == 3:
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.0015, weight_decay=5e-5)
-    if epoch == 9:
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
+    #if epoch == 3:
+        #optimizer = torch.optim.Adam(model.parameters(), lr=0.0015, weight_decay=5e-5)
+    #if epoch == 9:
+        #optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
     for batch in tqdm(train_data):
         
         model.init_hidden()
@@ -279,8 +289,6 @@ for epoch in range(num_epochs):
         loss.backward(retain_graph=True)
         loss_track += loss.item()
         optimizer.step()
-        #model.hidden_state.detach_()
-        #model.cell_state.detach_()
         
 
     print("Epoch {}/{}, Avg loss: {}".format(epoch+1, num_epochs, loss_track/len(train_data)))
