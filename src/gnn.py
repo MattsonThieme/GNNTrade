@@ -16,38 +16,35 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
 from tqdm import tqdm
 import random
+import configuration
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 data_list = []
 bulk_data = []
 
-with open('../data/BTC-ETH-XLM-CVC_5s.csv', 'r') as f:
+with open('../data/{}'.format(configuration.filename), 'r') as f:
     reader = csv.reader(f)
     bulk_data = list(reader)
 
 labels = bulk_data.pop(0)
 
 # All-to-all, undirected connections between four assets - can modify in the future for n assets
-edge_index = torch.tensor([[0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3],
-                           [1, 2, 3, 0, 2, 3, 0, 1, 3, 0, 1, 2]], dtype=torch.long)
-
-
+edge_index = torch.tensor(configuration.edge_index, dtype=torch.long)
 num_edges = edge_index.shape[1]
-
-period = 6  # 6*5s = 30s period
+period = int(configuration.period/configuration.sampling_rate)
 
 # Scale down dataset for prototyping
-#bulk_data = bulk_data[:int(len(bulk_data)/10)]
-
+bulk_data = bulk_data[:int(len(bulk_data)/configuration.scale_raw_data)]
 max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
 data = np.array(bulk_data[:max_index]).astype(float)
-batch_size = 1#024
-look_ahead = 60  # Steps to look ahead - 30 minutes
-num_epochs = 6
-train_test_split = 0.8
-look_back = 60  # Steps to look back - 1 hr
-label_size = 1  # Only want to predict
+
+batch_size = configuration.batch_size
+look_ahead = int(configuration.look_ahead*60/configuration.period)  # Steps to look ahead - 30 minutes
+num_epochs = configuration.num_epochs
+train_test_split = configuration.train_test_split
+look_back = int(configuration.look_back*60/configuration.period)  # Steps to look back
+label_size = configuration.label_size  # Only want to predict one value per node (future value)
 
 # Fill this with data loaders - still not sure how to save this
 loaders = []
@@ -103,9 +100,8 @@ def multiplex(data, period):
 
     return datasets
 
-# Normalize data by row
+# Normalize data by row (by asset)
 data = data/np.amax(data, 0)
-
 datasets = multiplex(data, period)
 
 # Create list of Data objects
@@ -147,13 +143,11 @@ class SAGEConv(MessagePassing):
     def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers):#, flow='target_to_source'):
         super(SAGEConv, self).__init__(aggr='add') #  "Max" aggregation.
 
-        
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim  # Note: output_dim for LSTM = hidden_dim for now
         self.n_layers = n_layers
         self.lstm_layer = nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
         
-
         # Messages - MLP
         self.lin1 = torch.nn.Linear(in_channels, 128)
         self.LLn1 = nn.LayerNorm(128)
@@ -165,10 +159,10 @@ class SAGEConv(MessagePassing):
         self.lstm_message = nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
         self.l1_message = torch.nn.Linear(self.hidden_dim, message_out, bias=False)
 
-        # Unique LSTMs for each interaction type
+        # Unique LSTMs for each interaction type - IN PROGRESS
         self.msg_lstm_list = nn.ModuleList([nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True) for _ in range(num_edges)])
 
-
+        # Always assume this - batching handles batch updates
         self.batch_size = 1
         self.seq_len = 1
 
@@ -177,7 +171,6 @@ class SAGEConv(MessagePassing):
         self.cell_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
         self.hidden = (self.hidden_state, self.cell_state)
 
-        
         #self.update_lin = torch.nn.Linear(in_channels + out_channels, 1, bias=True)
         self.update_lin1 = torch.nn.Linear(hidden_dim + message_out, 128, bias=False)
         self.ULn1 = nn.LayerNorm(128)
@@ -199,7 +192,6 @@ class SAGEConv(MessagePassing):
         # Not sure if these two are necessary
         edge_index, _ = remove_self_loops(edge_index)
         edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
-        
         
         return self.propagate(edge_index, size=(num_nodes, num_nodes), x=x)
 
@@ -242,10 +234,17 @@ class SAGEConv(MessagePassing):
 
     def message(self, x_j):
 
-        self.init_hidden()
-        x_j, self.hidden = self.lstm_message(x_j.unsqueeze(0), self.hidden)
-        x_j = self.act1(x_j)
-        x_j = self.act2(self.l1_message(x_j.squeeze(0)))
+        if configuration.message_type == 'mlp':
+
+            x_j = self.act1(self.LLn1(self.lin1(x_j)))
+            x_j = self.act2(self.lin2(x_j))
+
+        if configuration.message_type == 'lstm':
+
+            self.init_hidden()
+            x_j, self.hidden = self.lstm_message(x_j.unsqueeze(0), self.hidden)
+            x_j = self.act1(x_j)
+            x_j = self.act2(self.l1_message(x_j.squeeze(0)))
 
         return x_j
 
@@ -258,11 +257,11 @@ class SAGEConv(MessagePassing):
         
         return new_embedding.squeeze(0)
 
-message_out = 8  # Size of the output of messages
+message_out = configuration.message_out  # Size of the output of messages
 input_dim = look_back  # Input dim to the LSTM
 output_dim = label_size  # Output of final linear embedding update
-hidden_dim = 16  # Hidden dim of LSTM
-num_layers = 1  # Number of LSTM layers
+hidden_dim = configuration.hidden_dim  # Hidden dim of LSTM
+num_layers = configuration.num_layers  # Number of LSTM layers
 
 model = SAGEConv(look_back, output_dim, message_out, input_dim, hidden_dim, num_layers).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=0.003, weight_decay=5e-5)
