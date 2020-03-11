@@ -1,7 +1,7 @@
 
 
 <p align="center">
-  <img width="300" height="300" src="supp/network_outline.png">
+  <img src="supp/network_outline.png">
 </p>
 
 # GNNTrade
@@ -92,11 +92,13 @@ That's it! Tweak the model parameters and see what helps you better predict pric
 
 Now that the model is up and running, here are some details about what is going on under the hood. First, it is important to understand what the model is doing.
 
-![network description](supp/network_description.png)
+<p align="center">
+  <img src="supp/training_outline.png">
+</p>
 
 In the above figure, consider each colored box under each asset to be the ask price for that asset at that timestep. We assign to each node (shown in the image below) an embedding composed of the concatenation of price histories over some range (specified in [configuration.py](src/configuration.py)). We are then trying to predict the values of each of those assets some time down the line. 
 
-![training outline](supp/training_outline.png)
+![network description](supp/network_description.png)
 
 The model update methodology is shown above. First, we structure the model graphically, assigning each node the embeddings mentioned above. For each node, we pass messages (embeddings) through intervening message networks and aggregate them into a message vector. This message vector is then combined with a transformation of the existing node embedding and fed into the update network, which produces the final embedding which represents the predicted price for that asset.
 
