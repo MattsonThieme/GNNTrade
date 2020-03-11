@@ -76,7 +76,7 @@ class Execute(object):
         hidden_dim = configuration.hidden_dim  # Hidden dim of LSTM
         num_layers = configuration.num_layers  # Number of LSTM layers
 
-        self.model = SAGEConv(look_back, output_dim, message_out, input_dim, hidden_dim, num_layers, num_edges).to(device)
+        self.model = MPNN(look_back, output_dim, message_out, input_dim, hidden_dim, num_layers, num_edges).to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.003, weight_decay=5e-5)
 
         train_data = data_list[0:int(len(data_list)*train_test_split)]
@@ -104,6 +104,8 @@ class Execute(object):
                 loss.backward(retain_graph=True)
                 loss_track += loss.item()
                 self.optimizer.step()
+
+            torch.save(self.model.state_dict(),"GNN_{}.pt".format("-".join(configuration.asset_names)))
                 
             print("Epoch {}/{}, Avg loss: {}".format(epoch+1, self.num_epochs, loss_track/len(self.train_data)))
 
@@ -227,12 +229,9 @@ class GCN(MessagePassing):
         x = self.conv2(x, edge_index)
         return x
 
-
-# Try changing the update function to be an LSTM, and the massage function to be still an MLP
-# Need to change parser to include x price steps back, reasonable
-class SAGEConv(MessagePassing):
+class MPNN(MessagePassing):
     def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers, num_edges):#, flow='target_to_source'):
-        super(SAGEConv, self).__init__(aggr='add') #  "Max" aggregation.
+        super(MPNN, self).__init__(aggr='add') #  "Max" aggregation.
 
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim  # Note: output_dim for LSTM = hidden_dim for now

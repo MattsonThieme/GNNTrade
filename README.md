@@ -93,7 +93,7 @@ That's it! Tweak the model parameters and see what helps you better predict pric
 Now that the model is up and running, here are some details about what is going on under the hood. First, it is important to understand what the model is doing.
 
 <p align="center">
-  <img src="supp/training_outline.png" width="60%" height="60%">
+  <img src="supp/training_outline.png" width="40%" height="40%">
 </p>
 
 In the above figure, consider each colored box under each asset to be the ask price for that asset at that timestep. We assign to each node (shown in the image below) an embedding composed of the concatenation of price histories over some range (specified in [configuration.py](src/configuration.py)). We are then trying to predict the values of each of those assets some time down the line. 
@@ -102,17 +102,9 @@ In the above figure, consider each colored box under each asset to be the ask pr
 
 The model update methodology is shown above. First, we structure the model graphically, assigning each node the embeddings mentioned above. For each node, we pass messages (embeddings) through intervening message networks and aggregate them into a message vector. This message vector is then combined with a transformation of the existing node embedding and fed into the update network, which produces the final embedding which represents the predicted price for that asset.
 
-## Rewards
-
-A main challenge in all reinforcement learning is reward engineering, and one of the main contributions of this project is its simple reward scheme, detailed below.
-
-![reward scheme](supp/reward_scheme.png)
-
-In essence, we recognize that all the steps leading to some final sale contributed to the acquisition of that sale - the time spend holding before the purchase, the purchase price, time spend holding the asset, and finally the sale price. Here, we assign all of those actions the reward of the final sale. This makes intuitive sense while also preventing the model from collapsing into a state in which it is always trying to either buy, hold, or sell.
-
 ## I/O
 
-As touched on in the previous section, this model ingests historical prices for some asset, as well as the parameters defining the trading environment, and outputs a softmax distribution over three actions corresponding to buying, holding or selling.
+As touched on in the previous section, this model ingests historical prices for all assets in asset_list and outputs a final value for each asset. Accuracy is calculated as the percentage of predictions that move in the right direction (relative to the current price).
 
 
 

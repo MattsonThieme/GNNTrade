@@ -7,8 +7,8 @@ sampling_rate = 5          # Sampling rate of the raw data
 # Training parameters
 period = 30                # Period to feed into network (seconds)
 batch_size = 1024          # Batch size
-look_ahead = 30            # Minutes to look ahead
-num_epochs = 1             # Number of epochs
+look_ahead = 30            # Minutes to look ahead - we're trying to predict price movements this far away
+num_epochs = 5             # Number of epochs
 train_test_split = 0.8     # Train/test split
 look_back = 60             # Minutes to look back
 label_size = 1             # Out put dimension - default to predicting one value per node (future asset price)
