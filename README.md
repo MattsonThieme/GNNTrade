@@ -1,6 +1,10 @@
+![network model](supp/network_outline.png){:height="50%" width="50%"}
+
 # GNNTrade
 
 Forecasting cryptocurrency price movements with graph neural networks.
+
+## Summary
 
 This repo contains all code necessary for training a message passing graph neural network to forecast price crypto price movements, and includes scripts for:
 
@@ -68,7 +72,7 @@ $ python gnn.py
 When training has begun (data processing takes a few seconds), a tqdm progress bar will appear. After each epoch, a brief report of the training loss will appear.
 
 ```{shell}
-100%|███████████████████████████████████████████████████████████████████████████| 284/284 [18:47<00:00,  3.97s/it]
+100%|████████████████████████████████████████████████████████████| 284/284 [18:47<00:00,  3.97s/it]
 Epoch 1/10, Avg loss: 0.004397264795942915
 ``` 
 
@@ -84,7 +88,7 @@ That's it! Tweak the model parameters and see what helps you better predict pric
 
 Now that the model is up and running, here are some details about what is going on under the hood. First, it is important to understand what the model is doing.
 
-![network model](supp/network_outline.png)
+![network description](supp/network_description.png)
 
 In the above figure, consider each colored box under each asset to be the ask price for that asset at that timestep. We assign to each node (shown in the image below) an embedding composed of the concatenation of price histories over some range (specified in [configuration.py](src/configuration.py)). We are then trying to predict the values of each of those assets some time down the line. 
 
