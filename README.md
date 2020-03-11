@@ -1,3 +1,6 @@
+
+
+![network model](supp/network_outline.png){:class="img-responsive"}
 ![network model](supp/network_outline.png){:height="50%" width="50%"}
 
 # GNNTrade
