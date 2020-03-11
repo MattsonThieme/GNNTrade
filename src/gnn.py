@@ -8,8 +8,12 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GatedGraphConv
+from torch.nn import Parameter as Param
+#from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import add_self_loops, degree
+from torch_geometric.utils import remove_self_loops, add_self_loops
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,34 +24,140 @@ import configuration
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-data_list = []
-bulk_data = []
+class Execute(object):
+    def __init__(self):
 
-with open('../data/{}'.format(configuration.filename), 'r') as f:
-    reader = csv.reader(f)
-    bulk_data = list(reader)
+        data_list = []
+        bulk_data = []
 
-labels = bulk_data.pop(0)
+        # Load data
+        with open('../data/{}'.format(configuration.filename), 'r') as f:
+            reader = csv.reader(f)
+            bulk_data = list(reader)
 
-# All-to-all, undirected connections between four assets - can modify in the future for n assets
-edge_index = torch.tensor(configuration.edge_index, dtype=torch.long)
-num_edges = edge_index.shape[1]
-period = int(configuration.period/configuration.sampling_rate)
+        labels = bulk_data.pop(0)
 
-# Scale down dataset for prototyping
-bulk_data = bulk_data[:int(len(bulk_data)/configuration.scale_raw_data)]
-max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
-data = np.array(bulk_data[:max_index]).astype(float)
+        # All-to-all, undirected connections between four assets - can modify in the future for n assets
+        edge_index = torch.tensor(configuration.edge_index, dtype=torch.long)
+        num_edges = edge_index.shape[1]
+        period = int(configuration.period/configuration.sampling_rate)
 
-batch_size = configuration.batch_size
-look_ahead = int(configuration.look_ahead*60/configuration.period)  # Steps to look ahead - 30 minutes
-num_epochs = configuration.num_epochs
-train_test_split = configuration.train_test_split
-look_back = int(configuration.look_back*60/configuration.period)  # Steps to look back
-label_size = configuration.label_size  # Only want to predict one value per node (future value)
+        # Scale down dataset for prototyping
+        bulk_data = bulk_data[:int(len(bulk_data)/configuration.scale_raw_data)]
+        max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
+        data = np.array(bulk_data[:max_index]).astype(float)
 
-# Fill this with data loaders - still not sure how to save this
-loaders = []
+        batch_size = configuration.batch_size
+        look_ahead = int(configuration.look_ahead*60/configuration.period)  # Steps to look ahead - 30 minutes
+        self.num_epochs = configuration.num_epochs
+        train_test_split = configuration.train_test_split
+        look_back = int(configuration.look_back*60/configuration.period)  # Steps to look back
+        label_size = configuration.label_size  # Only want to predict one value per node (future value)
+
+        # Fill this with data loaders - still not sure how to save this
+        loaders = []
+
+        # Normalize data by row (by asset)
+        data = data/np.amax(data, 0)
+        datasets = multiplex(data, period)
+
+        # Create list of Data objects
+        for data in datasets:
+            for row in range(look_back, len(data) - look_ahead):
+                #x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
+                x, y = gen_data(data[row-look_back:row], data[row+look_ahead])   
+
+                data_list.append(Data(x=x, y=y, edge_index=edge_index))
+
+
+        message_out = configuration.message_out  # Size of the output of messages
+        input_dim = look_back  # Input dim to the LSTM
+        output_dim = label_size  # Output of final linear embedding update
+        hidden_dim = configuration.hidden_dim  # Hidden dim of LSTM
+        num_layers = configuration.num_layers  # Number of LSTM layers
+
+        self.model = SAGEConv(look_back, output_dim, message_out, input_dim, hidden_dim, num_layers, num_edges).to(device)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.003, weight_decay=5e-5)
+
+        train_data = data_list[0:int(len(data_list)*train_test_split)]
+        test_data = data_list[int(len(data_list)*train_test_split):]
+
+        self.train_data = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=10)
+        self.test_data = DataLoader(test_data, batch_size=batch_size, shuffle=True, num_workers=10)
+
+    def train(self):
+
+        self.model.train()
+        for epoch in range(self.num_epochs):
+            loss_track = 0
+            #if epoch == 3:
+                #optimizer = torch.optim.Adam(model.parameters(), lr=0.0015, weight_decay=5e-5)
+            #if epoch == 9:
+                #optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
+            for batch in tqdm(self.train_data):
+                
+                self.model.init_hidden()
+                self.optimizer.zero_grad()
+                out = self.model(batch)
+                loss = F.mse_loss(out, batch.y)
+                
+                loss.backward(retain_graph=True)
+                loss_track += loss.item()
+                self.optimizer.step()
+                
+            print("Epoch {}/{}, Avg loss: {}".format(epoch+1, self.num_epochs, loss_track/len(self.train_data)))
+
+    def test(self):
+
+        self.model.eval()
+
+        loss_track = 0
+
+        final_out = None
+        final_batch_label = None
+        final_batch_initial = None
+
+        dir_correct = 0
+        dir_wrong = 0
+
+        # Track accuracies for individual assets
+        assets = [[] for i in range(len(configuration.asset_names))]
+        asset_names = configuration.asset_names
+
+        for batch in tqdm(self.test_data):
+            out = self.model(batch)
+            loss_track += F.mse_loss(out, batch.y).item()
+            final_out = out
+            final_batch_label = batch.y
+            final_batch_initial = batch.x
+
+            # Calculate correct moves
+            for i, x in enumerate(final_batch_label):
+
+                initial = final_batch_initial[i].data[0]
+                final = x.data[0]
+                pred = final_out[i].data[0]
+                actual_shift = 100*(final - initial)/final
+                predicted_shift = 100*(pred - initial)/final
+                price_dir = final - initial
+                pred_dir = pred - initial
+
+                if predicted_shift < 0 and actual_shift < 0:
+                    dir_correct += 1
+                    assets[i%len(assets)].append(1)
+                if predicted_shift >= 0 and actual_shift >= 0:
+                    dir_correct += 1
+                    assets[i%len(assets)].append(1)
+                else:
+                    dir_wrong += 1
+                    assets[i%len(assets)].append(0)
+
+
+        print("Correct direction ACC: ", dir_correct/(dir_correct + dir_wrong))
+
+        for i, scores in enumerate(assets):
+            print("{}: {}% correct".format(asset_names[i], sum(scores)/len(scores)))
+
 
 def pos_vel_next(last, current, last_look_ahead, look_ahead):
 
@@ -100,21 +210,6 @@ def multiplex(data, period):
 
     return datasets
 
-# Normalize data by row (by asset)
-data = data/np.amax(data, 0)
-datasets = multiplex(data, period)
-
-# Create list of Data objects
-for data in datasets:
-    for row in range(look_back, len(data) - look_ahead):
-        #x, y = pos_vel_next(data[row - 1], data[row], data[row + look_ahead - 1], data[row + look_ahead])
-        x, y = gen_data(data[row-look_back:row], data[row+look_ahead])   
-
-        data_list.append(Data(x=x, y=y, edge_index=edge_index))
-
-
-from torch.nn import Parameter as Param
-from torch_geometric.nn.conv import MessagePassing
 
 # Simple 2 layer GCN
 class GCN(MessagePassing):
@@ -132,15 +227,11 @@ class GCN(MessagePassing):
         x = self.conv2(x, edge_index)
         return x
 
-from torch_geometric.nn import MessagePassing
-from torch_geometric.utils import add_self_loops, degree
-from torch_geometric.utils import remove_self_loops, add_self_loops
-
 
 # Try changing the update function to be an LSTM, and the massage function to be still an MLP
 # Need to change parser to include x price steps back, reasonable
 class SAGEConv(MessagePassing):
-    def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers):#, flow='target_to_source'):
+    def __init__(self, in_channels, out_channels, message_out, input_dim, hidden_dim, n_layers, num_edges):#, flow='target_to_source'):
         super(SAGEConv, self).__init__(aggr='add') #  "Max" aggregation.
 
         self.input_dim = input_dim
@@ -257,93 +348,7 @@ class SAGEConv(MessagePassing):
         
         return new_embedding.squeeze(0)
 
-message_out = configuration.message_out  # Size of the output of messages
-input_dim = look_back  # Input dim to the LSTM
-output_dim = label_size  # Output of final linear embedding update
-hidden_dim = configuration.hidden_dim  # Hidden dim of LSTM
-num_layers = configuration.num_layers  # Number of LSTM layers
-
-model = SAGEConv(look_back, output_dim, message_out, input_dim, hidden_dim, num_layers).to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.003, weight_decay=5e-5)
-
-train_data = data_list[0:int(len(data_list)*train_test_split)]
-test_data = data_list[int(len(data_list)*train_test_split):]
-
-train_data = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=10)
-test_data = DataLoader(test_data, batch_size=batch_size, shuffle=True, num_workers=10)
-
-
-model.train()
-from torch.autograd import Variable
-
-
-for epoch in range(num_epochs):
-    loss_track = 0
-    #if epoch == 3:
-        #optimizer = torch.optim.Adam(model.parameters(), lr=0.0015, weight_decay=5e-5)
-    #if epoch == 9:
-        #optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
-    for batch in tqdm(train_data):
-        
-        model.init_hidden()
-        optimizer.zero_grad()
-        out = model(batch)
-        loss = F.mse_loss(out, batch.y)
-        
-        loss.backward(retain_graph=True)
-        loss_track += loss.item()
-        optimizer.step()
-        
-
-    print("Epoch {}/{}, Avg loss: {}".format(epoch+1, num_epochs, loss_track/len(train_data)))
-
-model.eval()
-
-loss_track = 0
-
-final_out = None
-final_batch_label = None
-final_batch_initial = None
-
-dir_correct = 0
-dir_wrong = 0
-
-# Track accuracies for individual assets
-assets = [[],[],[],[]]
-asset_names = ['BTC','ETH','XLM','CVC']
-
-for batch in tqdm(test_data):
-    out = model(batch)
-    loss_track += F.mse_loss(out, batch.y).item()
-    final_out = out
-    final_batch_label = batch.y
-    final_batch_initial = batch.x
-
-    # Calculate correct moves
-    for i, x in enumerate(final_batch_label):
-
-        initial = final_batch_initial[i].data[0]
-        final = x.data[0]
-        pred = final_out[i].data[0]
-        actual_shift = 100*(final - initial)/final
-        predicted_shift = 100*(pred - initial)/final
-        price_dir = final - initial
-        pred_dir = pred - initial
-
-        if predicted_shift < 0 and actual_shift < 0:
-            dir_correct += 1
-            assets[i%len(assets)].append(1)
-        if predicted_shift >= 0 and actual_shift >= 0:
-            dir_correct += 1
-            assets[i%len(assets)].append(1)
-        else:
-            dir_wrong += 1
-            assets[i%len(assets)].append(0)
-
-
-print("Correct direction ACC: ", dir_correct/(dir_correct + dir_wrong))
-
-for i, scores in enumerate(assets):
-    print("{}: {}% correct".format(asset_names[i], sum(scores)/len(scores)))
-
+beast = Execute()
+beast.train()
+beast.test()
 

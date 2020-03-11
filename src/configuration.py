@@ -8,7 +8,7 @@ sampling_rate = 5          # Sampling rate of the raw data
 period = 30                # Period to feed into network (seconds)
 batch_size = 1024          # Batch size
 look_ahead = 30            # Minutes to look ahead
-num_epochs = 6             # Number of epochs
+num_epochs = 1             # Number of epochs
 train_test_split = 0.8     # Train/test split
 look_back = 60             # Minutes to look back
 label_size = 1             # Out put dimension - default to predicting one value per node (future asset price)
@@ -21,6 +21,6 @@ scale_raw_data = 1         # Scale down raw data for prototyping (len(dataset) -
 
 # Network parameters
 message_out = 8            # Message embedding size
-hidden_dim = 16            # Hidden dim of the LSTM
-num_layers = 1             # Number of LSTM layers
+hidden_dim = 16            # Hidden dim of the update LSTM
+num_layers = 1             # Number of LSTM layers in update network
 message_type = 'lstm'      # Network type for message massing
