@@ -1,5 +1,8 @@
 
-![network model](supp/network_outline.png)
+
+<p align="center">
+  <img width="300" height="300" src="supp/network_outline.png">
+</p>
 
 # GNNTrade
 
