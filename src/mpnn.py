@@ -26,6 +26,7 @@ import configuration
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+
 class Execute(object):
     def __init__(self):
 
@@ -115,7 +116,7 @@ class Execute(object):
                 print("yshape: ", out.shape)
 
                 loss = F.mse_loss(out, y.squeeze(0))
-                loss = Variable(loss, requires_grad = True)
+                #loss = Variable(loss, requires_grad = True)
 
                 a = list(self.model.parameters())[0].clone()
                 loss.backward(retain_graph=True)
@@ -250,52 +251,15 @@ class UMPNN(nn.Module):
         # Always assume this - batching handles batch updates
         self.batch_size = 1
         self.seq_len = 1
-        '''
-        self.lstm_layer = nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
-        
-
-        # Messages - MLP
-        self.lin1 = torch.nn.Linear(in_channels, 128)
-        self.LLn1 = nn.LayerNorm(128)
-        self.lin2 = torch.nn.Linear(128, message_out)
-        self.act1 = torch.nn.ReLU()
-        self.act2 = torch.nn.ReLU()
-
-        # Messages - LSTM
-        self.lstm_message = nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
-        self.l1_message = torch.nn.Linear(self.hidden_dim, message_out, bias=False)
-
-        # Unique LSTMs for each interaction type - IN PROGRESS
-        self.msg_lstm_list = nn.ModuleList([nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True) for _ in range(num_edges)])
-
-        # Always assume this - batching handles batch updates
-        self.batch_size = 1
-        self.seq_len = 1
-
-        self.inp = torch.randn(self.batch_size, self.seq_len, self.input_dim)
-        self.hidden_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
-        self.cell_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
-        self.hidden = (self.hidden_state, self.cell_state)
-
-        #self.update_lin = torch.nn.Linear(in_channels + out_channels, 1, bias=True)
-        self.update_lin1 = torch.nn.Linear(hidden_dim + message_out, 128, bias=False)
-        self.ULn1 = nn.LayerNorm(128)
-        self.update_act1 = torch.nn.ReLU()
-        self.update_lin2 = torch.nn.Linear(128, out_channels, bias=False)
-        self.update_act2 = torch.nn.ReLU()
-        '''
 
         ##### Unique networks ######
 
         self.edge_index = configuration.edge_index
         self.num_edges = len(self.edge_index[0])
+        self.num_nodes = len(configuration.asset_names)
 
         # Unique LSTMs for each interaction type - IN PROGRESS
         self.msg_lstm_list = nn.ModuleList([nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True) for _ in range(self.num_edges)])
-
-        # Unique update functions for each node
-        self.num_nodes = len(configuration.asset_names)
-        self.update_lstm_list = nn.ModuleList([nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True) for _ in range(self.num_nodes)])
 
         # Unique aggregation functions
         self.agg_lin1_list = nn.ModuleList([torch.nn.Linear((self.num_nodes - 1)*configuration.message_out, 128, bias=False) for _ in range(self.num_nodes)])
@@ -303,15 +267,18 @@ class UMPNN(nn.Module):
         self.agg_act_l1 = nn.ModuleList([torch.nn.ReLU() for _ in range(self.num_nodes)])
         self.agg_lin2_list = nn.ModuleList([torch.nn.Linear(128, self.hidden_dim, bias=False) for _ in range(self.num_nodes)])
         
-        # Unique update functions
+        # Unique aggregation update functions
         self.update_mlp_lin1_list = nn.ModuleList([torch.nn.Linear(hidden_dim*2, 128, bias=False) for _ in range(self.num_nodes)])
         self.update_ln = nn.ModuleList([nn.LayerNorm(128) for _ in range(self.num_nodes)])
         self.update_act_l1 = nn.ModuleList([torch.nn.ReLU() for _ in range(self.num_nodes)])
         self.update_mlp_lin2_list = nn.ModuleList([torch.nn.Linear(128, 1, bias=False) for _ in range(self.num_nodes)])
 
-        self.aggregate = [[] for i in range(self.num_nodes)]
-        self.local_emb = [[] for i in range(self.num_nodes)]
-        self.final_emb = [[] for i in range(self.num_nodes)]
+        # Unique local update functions
+        self.update_lstm_list = nn.ModuleList([nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True) for _ in range(self.num_nodes)])
+
+        self.aggregate = [Variable(torch.tensor([]), requires_grad=True) for i in range(self.num_nodes)]
+        self.local_emb = [Variable(torch.tensor([]), requires_grad=True) for i in range(self.num_nodes)]
+        self.final_emb = [Variable(torch.tensor([]), requires_grad=True) for i in range(self.num_nodes)]
     
     def init_hidden(self):
         self.inp = torch.randn(self.batch_size, self.seq_len, self.input_dim, requires_grad=True)
@@ -335,27 +302,51 @@ class UMPNN(nn.Module):
 
         self.clear_lists()
 
-        x = data[0]
+        x = Variable(data[0], requires_grad=True)
 
         # Gather messages into a list of lists of tensors
-        for i in range(self.num_edges):
-            target = self.edge_index[0][i]
-            source = self.edge_index[1][i]
-            self.aggregate[target].append(self.messages(i, x[source]))
 
-        # Gather self embeddings into a list of tensors
-        for i in range(self.num_nodes):
-            self.local_emb[i].append(self.local_update(i, x[i]))
+        
+        #final_emb = Variable(torch.zeros(self.num_nodes))
+        
 
-        # Join aggregated embeddings with the local embeddings, generate new embeddings
-        # Return a list of 1d tensors
-        for i in range(self.num_nodes):
-            local = self.local_emb[i][0]
-            aggr = self.aggregate[i]
-            self.final_emb[i].append(self.final_update(i, local, aggr))
+        all_msgs = [Variable(torch.zeros(configuration.message_out).data) for _ in range(self.num_nodes)]
+        local_emb = [Variable(torch.zeros(configuration.hidden_dim).data) for _ in range(self.num_nodes)]
+        final_emb = Variable(torch.zeros(self.num_nodes).data)
+
+        for n in range(self.num_nodes):
+            #all_msgs = Variable(torch.zeros(configuration.message_out))
+            #local_emb = Variable(torch.zeros(configuration.hidden_dim))
+        
+            for i in range(self.num_edges):
+                if self.edge_index[0][i] == n:
+                    target = self.edge_index[0][i]
+                    source = self.edge_index[1][i]
+                    all_msgs[n] += self.messages(i, x[source])
+                    #self.aggregate[target].append(self.messages(i, x[source]))
+
+            # Gather self embeddings into a list of tensors
+            #for i in range(self.num_nodes):
+            #    if i == n:
+            local_emb[n] += self.local_update(n, x[n])
+                #self.local_emb[i].append(self.local_update(i, x[i]))
+            print("LOCAL ", all_msgs)
+
+            # Join aggregated embeddings with the local embeddings, generate new embeddings
+            # Return a list of 1d tensors
+            #for i in range(self.num_nodes):
+                #local = self.local_emb[i][0]
+                #aggr = self.aggregate[i]
+            self.final_emb[n] = self.final_update(n, local_emb[n], all_msgs[n]) 
+
+            print("final emb: ", self.final_emb)
 
         # 4x1 vector, to be compared to y
-        return torch.tensor(self.final_emb)
+
+        final_out = torch.tensor(self.final_emb)
+        print("final out")
+        print(final_out)
+        return final_out
 
     def messages(self, i, source_data):
 
@@ -381,8 +372,17 @@ class UMPNN(nn.Module):
     def final_update(self, i, local_data, aggr_data):
 
         # Stack aggregation and local
-        aggr = self.aggr(i, aggr_data)
-        x = torch.flatten(torch.stack([local_data, aggr]))
+        #aggr = self.aggr(i, aggr_data)
+        #x = torch.flatten(torch.stack([local_data, aggr]))
+
+        print("local data")
+        print(local_data)
+        print("aggr data")
+        print(aggr_data)
+
+        print(torch.flatten(torch.stack([local_data, aggr_data])))
+        x = torch.flatten(torch.stack([local_data, aggr_data]))
+
         x = self.update_act_l1[i](self.update_ln[i](self.update_mlp_lin1_list[i](x)))
         x = self.update_mlp_lin2_list[i](x)
         return x
