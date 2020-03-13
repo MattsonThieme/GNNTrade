@@ -30,7 +30,7 @@ Accuracy is calculated as the percentage of predictions that move in the right d
 
 Note: These instructions and setup scripts assume execution in Linux or MacOS environments with conda already installed (for conda installation, see their [install page](https://docs.conda.io/en/latest/miniconda.html)), and as such may require some tweaking for full functionality on Windows.
 
-### 1) Clone this repo:
+### 1) Clone this repo
 
 ```{shell}
 $ git clone https://github.com/MattsonThieme/GNNTrade.git
