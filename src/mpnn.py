@@ -99,6 +99,7 @@ class Execute(object):
             #if epoch == 9:
                 #optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
             for batch in tqdm(self.train_data):
+
                 x = batch[0]
                 y = batch[1]
 
@@ -112,7 +113,7 @@ class Execute(object):
                 loss = F.mse_loss(out, y.squeeze(0))
                 loss = Variable(loss, requires_grad = True)
 
-                print("Loss = ", loss)
+                #print("Loss = ", loss)
                 
                 loss.backward(retain_graph=True)
                 loss_track += loss.item()
@@ -121,7 +122,6 @@ class Execute(object):
             torch.save(self.model.state_dict(),"GNN_{}.pt".format("-".join(configuration.asset_names)))
                 
             print("Epoch {}/{}, Avg loss: {}".format(epoch+1, self.num_epochs, loss_track/len(self.train_data)))
-
 
     def test(self):
 
@@ -313,9 +313,16 @@ class UMPNN(nn.Module):
         hidden = (self.hidden_state, self.cell_state)
         return hidden
 
+    def clear_lists(self):
+        self.aggregate = [[] for i in range(self.num_nodes)]
+        self.local_emb = [[] for i in range(self.num_nodes)]
+        self.final_emb = [[] for i in range(self.num_nodes)]
+
     def forward(self, data):
+
+        self.clear_lists()
+
         x = data[0]
-        print(x.shape)
 
         # Gather messages into a list of lists of tensors
         for i in range(self.num_edges):
@@ -334,7 +341,6 @@ class UMPNN(nn.Module):
             aggr = self.aggregate[i]
             self.final_emb[i].append(self.final_update(i, local, aggr))
 
-        print("FINAL EMB ", self.final_emb)
         # 4x1 vector, to be compared to y
         return torch.tensor(self.final_emb)
 
@@ -358,19 +364,15 @@ class UMPNN(nn.Module):
         x = self.update_act_l1(self.update_ln(self.update_mlp_lin1_list[i](x)))
         x = self.update_mlp_lin2_list[i](x)
         return x
-        #x = torch.cat([local_data, aggr], dim=1).unsqueeze(0)
 
     # A little different, we're actually going to aggregate via MLPs
     def aggr(self, i, agg_list):
-        print("AGG LIST ", agg_list)
 
         agg = torch.flatten(torch.stack(agg_list))
         agg = self.agg_lin1_list[i](agg)
-        print("Agg shape: ", agg.shape)
         agg = self.agg_act_l1(self.agg_ln(agg))
         agg = self.agg_lin2_list[i](agg)
         return agg
-        #raise NotImplementedError
 
 
 
