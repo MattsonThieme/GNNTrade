@@ -30,14 +30,14 @@ Accuracy is calculated as the percentage of predictions that move in the right d
 
 Note: These instructions and setup scripts assume execution in Linux or MacOS environments with conda already installed (for conda installation, see their [install page](https://docs.conda.io/en/latest/miniconda.html)), and as such may require some tweaking for full functionality on Windows.
 
-###1) Clone this repo:
+### 1) Clone this repo:
 
 ```{shell}
 $ git clone https://github.com/MattsonThieme/GNNTrade.git
 $ cd GNNTrade
 ```
 
-###2) Build conda environment
+### 2) Build conda environment
 
 Run the following setup script to build and configure a new conda environment:
 
@@ -47,7 +47,7 @@ $ bash env_setup.sh
 
 This will create a new environment named `gnntrade`. 
 
-###3) Activate environment
+### 3) Activate environment
 
 Activate the conda environment, and we're ready to begin working.
 
