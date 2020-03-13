@@ -14,7 +14,7 @@ This repo contains all code necessary for training a message passing graph neura
 
 1. Environment configuration
 2. Data acquisition via [ccxt](https://github.com/ccxt/ccxt)
-3. Pre-processing
+3. Data pre-processing
 4. Model training/deployment
 
 Sections 3 and 4 are integrated and controlled via a [configuration script](src/configuration.py). See details in the following sections.
@@ -60,10 +60,10 @@ $ conda activate gnntrade
 
 For this project, I have included sample data so you can get started right away, but if you would like to collect your own data you can use [data/collector.py](data/collect.py). 
 
-To run the collection script, I recommend using a terminal multiplexer like [tmux](https://www.hamvocke.com/blog/a-quick-and-easy-guide-to-tmux/) on a small AWS instance. Edit parameters at the top of the file including 'symbol' and 'delay' then run:
+To run the collection script, I recommend using a terminal multiplexer like [tmux](https://www.hamvocke.com/blog/a-quick-and-easy-guide-to-tmux/) on a small AWS instance. Edit parameters at the top of the file including 'symbol' and 'delay' (all parameters have descriptive labels followed by explanations of their function) then run:
 
 ```{shell}
-$ python collect.py
+(gnntrade)$ python collect.py
 ```
 
 This will create and continuously append a file with prices for all assets in asset_list once every sampling period ("target" seconds). We'll see in subsequent sections how to use this new file for training (it's as simple as setting a single variable in the configuration file).
