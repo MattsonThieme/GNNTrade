@@ -30,6 +30,8 @@ class Execute(object):
     def __init__(self):
 
         data_list = []
+        label_list = []
+
         bulk_data = []
 
         # Load data
@@ -49,7 +51,7 @@ class Execute(object):
         max_index = len(bulk_data)-len(bulk_data)%period  # Don't overshoot
         data = np.array(bulk_data[:max_index]).astype(float)
 
-        batch_size = 1#configuration.batch_size
+        batch_size = configuration.batch_size
         look_ahead = int(configuration.look_ahead*60/configuration.period)  # Steps to look ahead - 30 minutes
         self.num_epochs = configuration.num_epochs
         train_test_split = configuration.train_test_split
@@ -81,6 +83,7 @@ class Execute(object):
 
         self.model = UMPNN(look_back, output_dim, message_out, input_dim, hidden_dim, num_layers, num_edges).to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=0.003, weight_decay=5e-5)
+        print(self.model.parameters)
 
         train_data = data_list[0:int(len(data_list)*train_test_split)]
         test_data = data_list[int(len(data_list)*train_test_split):]
@@ -88,36 +91,40 @@ class Execute(object):
         self.train_data = DataLoader(train_data, batch_size=batch_size, shuffle=True, num_workers=10)
         self.test_data = DataLoader(test_data, batch_size=batch_size, shuffle=True, num_workers=10)
 
-
+    # Try using individual train_data and train_label lists
     def train(self):
 
-        self.model.train()
+        #self.model.train()
+
+        #for param in self.model.parameters():
+        #    param.requires_grad = True
+
         for epoch in range(self.num_epochs):
             loss_track = 0
-            #if epoch == 3:
-                #optimizer = torch.optim.Adam(model.parameters(), lr=0.0015, weight_decay=5e-5)
-            #if epoch == 9:
-                #optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=5e-5)
             for batch in tqdm(self.train_data):
+                
+                self.optimizer.zero_grad()
 
-                x = batch[0]
-                y = batch[1]
+                x = Variable(batch[0], requires_grad=True)
+                y = Variable(batch[1], requires_grad=True)
+
 
                 self.model.init_hidden()
-                self.optimizer.zero_grad()
                 out = self.model(x)
 
-                #print("\n\n\n\nout: ", out, out.shape)
-                #print("y: ", y.squeeze(0), y.squeeze(0).shape)
-                
+                print("yshape: ", out.shape)
+
                 loss = F.mse_loss(out, y.squeeze(0))
                 loss = Variable(loss, requires_grad = True)
 
-                #print("Loss = ", loss)
-                
+                a = list(self.model.parameters())[0].clone()
                 loss.backward(retain_graph=True)
                 loss_track += loss.item()
                 self.optimizer.step()
+
+                b = list(self.model.parameters())[0].clone()
+                print(list(self.model.parameters())[0].grad)
+                print("Eq? ", torch.equal(a.data, b.data))
 
             torch.save(self.model.state_dict(),"GNN_{}.pt".format("-".join(configuration.asset_names)))
                 
@@ -239,8 +246,14 @@ class UMPNN(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim  # Note: output_dim for LSTM = hidden_dim for now
         self.n_layers = n_layers
+
+        # Always assume this - batching handles batch updates
+        self.batch_size = 1
+        self.seq_len = 1
+        '''
         self.lstm_layer = nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True)
         
+
         # Messages - MLP
         self.lin1 = torch.nn.Linear(in_channels, 128)
         self.LLn1 = nn.LayerNorm(128)
@@ -270,7 +283,7 @@ class UMPNN(nn.Module):
         self.update_act1 = torch.nn.ReLU()
         self.update_lin2 = torch.nn.Linear(128, out_channels, bias=False)
         self.update_act2 = torch.nn.ReLU()
-
+        '''
 
         ##### Unique networks ######
 
@@ -285,31 +298,31 @@ class UMPNN(nn.Module):
         self.update_lstm_list = nn.ModuleList([nn.LSTM(self.input_dim, self.hidden_dim, self.n_layers, batch_first=True) for _ in range(self.num_nodes)])
 
         # Unique aggregation functions
-        self.agg_lin1_list = nn.ModuleList([torch.nn.Linear((self.num_nodes - 1)*configuration.message_out, 128, bias=True) for _ in range(self.num_nodes)])
-        self.agg_ln = nn.LayerNorm(128)
-        self.agg_act_l1 = torch.nn.ReLU()
-        self.agg_lin2_list = nn.ModuleList([torch.nn.Linear(128, self.hidden_dim, bias=True) for _ in range(self.num_nodes)])
+        self.agg_lin1_list = nn.ModuleList([torch.nn.Linear((self.num_nodes - 1)*configuration.message_out, 128, bias=False) for _ in range(self.num_nodes)])
+        self.agg_ln = nn.ModuleList([nn.LayerNorm(128) for _ in range(self.num_nodes)])
+        self.agg_act_l1 = nn.ModuleList([torch.nn.ReLU() for _ in range(self.num_nodes)])
+        self.agg_lin2_list = nn.ModuleList([torch.nn.Linear(128, self.hidden_dim, bias=False) for _ in range(self.num_nodes)])
         
         # Unique update functions
-        self.update_mlp_lin1_list = nn.ModuleList([torch.nn.Linear(hidden_dim*2, 128, bias=True) for _ in range(self.num_nodes)])
-        self.update_ln = nn.LayerNorm(128)
-        self.update_act_l1 = torch.nn.ReLU()
-        self.update_mlp_lin2_list = nn.ModuleList([torch.nn.Linear(128, 1, bias=True) for _ in range(self.num_nodes)])
+        self.update_mlp_lin1_list = nn.ModuleList([torch.nn.Linear(hidden_dim*2, 128, bias=False) for _ in range(self.num_nodes)])
+        self.update_ln = nn.ModuleList([nn.LayerNorm(128) for _ in range(self.num_nodes)])
+        self.update_act_l1 = nn.ModuleList([torch.nn.ReLU() for _ in range(self.num_nodes)])
+        self.update_mlp_lin2_list = nn.ModuleList([torch.nn.Linear(128, 1, bias=False) for _ in range(self.num_nodes)])
 
         self.aggregate = [[] for i in range(self.num_nodes)]
         self.local_emb = [[] for i in range(self.num_nodes)]
         self.final_emb = [[] for i in range(self.num_nodes)]
     
     def init_hidden(self):
-        self.inp = torch.randn(self.batch_size, self.seq_len, self.input_dim)
-        self.hidden_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
-        self.cell_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
+        self.inp = torch.randn(self.batch_size, self.seq_len, self.input_dim, requires_grad=True)
+        self.hidden_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim, requires_grad=True)
+        self.cell_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim, requires_grad=True)
         self.hidden = (self.hidden_state, self.cell_state)
 
     def gen_hidden(self):
-        inp = torch.randn(self.batch_size, self.seq_len, self.input_dim)
-        hidden_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
-        cell_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim)
+        inp = torch.randn(self.batch_size, self.seq_len, self.input_dim, requires_grad=True)
+        hidden_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim, requires_grad=True)
+        cell_state = torch.randn(self.n_layers, self.batch_size, self.hidden_dim, requires_grad=True)
         hidden = (self.hidden_state, self.cell_state)
         return hidden
 
@@ -345,7 +358,7 @@ class UMPNN(nn.Module):
         return torch.tensor(self.final_emb)
 
     def messages(self, i, source_data):
-        #print("shape: ", source_data.unsqueeze(0))
+
         hidden = self.gen_hidden()
         x, hidden = self.msg_lstm_list[i](source_data.unsqueeze(0).unsqueeze(0), hidden)
         return x.squeeze(0).squeeze(0)
@@ -356,24 +369,23 @@ class UMPNN(nn.Module):
         x, hidden = self.update_lstm_list[i](local_data.unsqueeze(0).unsqueeze(0), hidden)
         return x.squeeze(0).squeeze(0)
 
-    def final_update(self, i, local_data, aggr_data):
-
-        # Stack aggregation and local
-        aggr = self.aggr(i, aggr_data)
-        x = torch.flatten(torch.stack([local_data, aggr]))
-        x = self.update_act_l1(self.update_ln(self.update_mlp_lin1_list[i](x)))
-        x = self.update_mlp_lin2_list[i](x)
-        return x
-
     # A little different, we're actually going to aggregate via MLPs
     def aggr(self, i, agg_list):
 
         agg = torch.flatten(torch.stack(agg_list))
         agg = self.agg_lin1_list[i](agg)
-        agg = self.agg_act_l1(self.agg_ln(agg))
+        agg = self.agg_act_l1[i](self.agg_ln[i](agg))
         agg = self.agg_lin2_list[i](agg)
         return agg
 
+    def final_update(self, i, local_data, aggr_data):
+
+        # Stack aggregation and local
+        aggr = self.aggr(i, aggr_data)
+        x = torch.flatten(torch.stack([local_data, aggr]))
+        x = self.update_act_l1[i](self.update_ln[i](self.update_mlp_lin1_list[i](x)))
+        x = self.update_mlp_lin2_list[i](x)
+        return x
 
 
 
