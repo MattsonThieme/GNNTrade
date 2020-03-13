@@ -68,7 +68,7 @@ To run the collection script, I recommend using a terminal multiplexer like [tmu
 
 This will create and continuously append a file with prices for all assets in asset_list once every sampling period ("target" seconds). We'll see in subsequent sections how to use this new file for training (it's as simple as setting a single variable in the configuration file).
 
-## Training
+## Model Training
 
 To begin training, change directory into `src/`:
 
@@ -101,7 +101,7 @@ That's it! Tweak the model parameters and see what helps you better predict pric
 
 :bangbang: Disclaimer :bangbang: The sample dataset provided is **very small** (GitHub limits file sizes to 100Mb). Before using this model to inform trading decisions, please collect more data using the provided scripts and validate the model over a longer time period. We claim no responsibility for any losses incurred when deloying this model.
 
-## Model
+## Model Architecture
 
 Now that the model is up and running, here are some details about what is going on under the hood. First, it is important to understand what the model is doing.
 
